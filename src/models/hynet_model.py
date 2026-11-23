@@ -21,7 +21,7 @@ EPS_L2_NORM = 1e-10
 
 
 def desc_l2norm(desc):
-    """descriptors with shape NxC or NxCxHxW"""
+    """将形状为 [N, C] 或 [N, C, H, W] 的描述子展平并做 L2 单位化。"""
 
     desc = desc.view(desc.size(0),-1)
     desc = desc / desc.pow(2).sum(dim=1, keepdim=True).add(EPS_L2_NORM).pow(0.5)
@@ -29,14 +29,11 @@ def desc_l2norm(desc):
 
 
 class FRN(nn.Module):
+    """滤波响应归一化层（Filter Response Normalization）：消除 BatchNorm 对批大小的依赖。"""
+
     def __init__(
         self, num_features, eps=1e-6, is_bias=True, is_scale=True, is_eps_leanable=False
     ):
-        """
-        FRN layer as in the paper
-        Filter Response Normalization Layer: Eliminating Batch Dependence in the Training of Deep Neural Networks'
-        <https://arxiv.org/abs/1911.09737>
-        """
         super(FRN, self).__init__()
 
         self.num_features = num_features
@@ -45,6 +42,7 @@ class FRN(nn.Module):
         self.is_bias = is_bias
         self.is_scale = is_scale
 
+        # 可学习的逐通道缩放参数 gamma (weight) 与平移参数 beta (bias)
         self.weight = nn.parameter.Parameter(
             torch.Tensor(1, num_features, 1, 1), requires_grad=True
         )
@@ -58,6 +56,7 @@ class FRN(nn.Module):
         self.reset_parameters()
 
     def reset_parameters(self):
+        """初始化缩放为 1、偏置为 0。"""
         nn.init.ones_(self.weight)
         nn.init.zeros_(self.bias)
         if self.is_eps_leanable:
@@ -67,16 +66,16 @@ class FRN(nn.Module):
         return "num_features={num_features}, eps={init_eps}".format(**self.__dict__)
 
     def forward(self, x):
-        # Compute the mean norm of activations per channel.
+        # 1. 对每个样本的每个通道独立计算空间二阶矩均值 nu^2（不做减均值）
         nu2 = x.pow(2).mean(dim=[2, 3], keepdim=True)
         nu2 = nu2.to(device=torch.device('cuda'))
         eps = self.eps.abs()
         eps = eps.to(device=torch.device('cuda'))
-        # Perform FRN.
+        # 2. 除以均方根完成归一化：x / sqrt(nu^2 + eps)
         x = x * torch.rsqrt(nu2 + eps)
         x = x.to(device=torch.device('cuda'))
 
-        # Scale and Bias
+        # 3. 逐通道仿射变换：y = gamma * x + beta
         if self.is_scale:
             self_weight = self.weight
             self_weight = self_weight.to(device=torch.device('cuda'))
@@ -89,40 +88,40 @@ class FRN(nn.Module):
 
 
 class TLU(nn.Module):
+    """阈值线性单元（Thresholded Linear Unit）：配合 FRN 使用的可学习阈值激活 max(x, tau)。"""
+
     def __init__(self, num_features):
-        """
-        TLU layer as in the paper
-        Filter Response Normalization Layer: Eliminating Batch Dependence in the Training of Deep Neural Networks'
-        <https://arxiv.org/abs/1911.09737>
-        """
         super(TLU, self).__init__()
         self.num_features = num_features
+        # 每个通道学习一个独立阈值 tau
         self.tau = nn.parameter.Parameter(
             torch.Tensor(1, num_features, 1, 1), requires_grad=True
         )
         self.reset_parameters()
 
     def reset_parameters(self):
-        # nn.init.zeros_(self.tau)
+        """将可学习阈值 tau 初始化为 -1。"""
         nn.init.constant_(self.tau, -1)
 
     def extra_repr(self):
         return "num_features={num_features}".format(**self.__dict__)
 
     def forward(self, x):
+        # 截断低于阈值 tau 的激活值
         tau = self.tau
         tau = tau.to(device=torch.device('cuda'))
         return torch.max(x, tau)
 
 
 class HyNet(nn.Module):
-    """HyNet model definition"""
+    """HyNet model definition（对比基线：FRN + TLU + 7层全卷积局部描述子）"""
 
     def __init__(self, is_bias=True, is_bias_FRN=True, dim_desc=128, drop_rate=0.2):
         super(HyNet, self).__init__()
         self.dim_desc = dim_desc
         self.drop_rate = drop_rate
 
+        # 首层先对输入单通道灰度 Patch 做 FRN+TLU，等价于可学习的输入标准化
         self.layer1 = nn.Sequential(
             FRN(1, is_bias=is_bias_FRN),
             TLU(1),
@@ -131,6 +130,7 @@ class HyNet(nn.Module):
             TLU(32),
         )
 
+        # 中间 4 层通过 stride=2 逐级降采样（共 16 倍）
         self.layer2 = nn.Sequential(
             nn.Conv2d(32, 32, kernel_size=3,stride=2, padding=1, bias=is_bias),
             FRN(32, is_bias=is_bias_FRN),
@@ -160,21 +160,14 @@ class HyNet(nn.Module):
             TLU(128),
         )
 
+        # 末尾 8x8 卷积直出 128 维特征
         self.layer7 = nn.Sequential(
             nn.Dropout(self.drop_rate),
             nn.Conv2d(128, self.dim_desc, kernel_size=8, bias=False),
             nn.BatchNorm2d(self.dim_desc, affine=False),
         )
-    # def input_norm(self, x):
-    #     flat = x.view(x.size(0), -1)
-    #     mp = torch.mean(flat, dim=1)
-    #     sp = torch.std(flat, dim=1) + 1e-7
-    #     return (
-    #         x - mp.detach().unsqueeze(-1).unsqueeze(-1).unsqueeze(-1).expand_as(x)
-    #     ) / sp.detach().unsqueeze(-1).unsqueeze(-1).unsqueeze(1).expand_as(x)
-
     def forward(self, x, mode="eval"):
-        #print(x.shape)
+        """依次通过 7 个卷积层提取 128 维特征并做 L2 归一化；训练模式额外返回归一化前原始向量。"""
         for layer in [
             self.layer1,
             self.layer2,
@@ -184,16 +177,8 @@ class HyNet(nn.Module):
             self.layer6,
         ]:
             x = layer(x)
-            #print(x.shape)
         desc_raw = self.layer7(x).squeeze()
-        #print(desc_raw.shape)
         desc_raw = desc_raw.view(desc_raw.size(0),-1)
-        #print(desc_raw.shape)
-        # desc_raw = self.layer7(x)
-        # print(desc_raw.shape)
-        # desc_raw = desc_raw.squeeze()
-        # print(desc_raw.shape)
-        # desc_raw = desc_raw.view(1, 128)
 
         desc = desc_l2norm(desc_raw)
 

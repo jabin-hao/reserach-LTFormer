@@ -40,21 +40,21 @@ class TripletDataset(data.Dataset):
     def get_file_list(self):
         """遍历 root 下所有子文件夹，校验并收集同时存在 a/p/n 的有效样本。"""
         local_list = []
-        folder_list = glob.glob(self.root + "/*") #返回所有匹配的文件路径列表 *匹配任意字符
+        folder_list = glob.glob(self.root + "/*") # 获取根目录下所有三元组子文件夹
 
         for d in folder_list:
             bOk = True
             image_list = glob.glob(d + "/*")
 
-            # TODO what is this if statement ??
+            # 1. 合法的三元组目录必须正好包含 3 个文件（a, p, n）
             if not len(image_list) == 3:
                 continue
 
+            # 2. 校验扩展名是否属于受支持的图片格式
             for i in image_list:
-                #分离文件名与拓展名
                 bOk = bOk and osp.splitext(i)[1] in supported_image_ext
 
-            # check same extension
+            # 获取三个文件的后缀名
             ext_0 = osp.splitext(image_list[0])[1]
             ext_1 = osp.splitext(image_list[1])[1]
             ext_2 = osp.splitext(image_list[2])[1]
@@ -62,13 +62,12 @@ class TripletDataset(data.Dataset):
             if not (ext_0 == ext_1 == ext_2):
                 pass
 
-            # check for a, n, and p
-            folder = osp.split(image_list[0])[0] #返回文件的路径和文件名
+            # 3. 拼出规范的 a/p/n 路径并确认三个文件全部存在
+            folder = osp.split(image_list[0])[0]
             anchor = folder + "/a" + ext_0
             positive = folder + "/p" + ext_0
             negative = folder + "/n" + ext_0
 
-            # Check whether the specified path exists or not 检查指定的路径是否存在
             bOk = bOk and osp.exists(anchor)
             bOk = bOk and osp.exists(positive)
             bOk = bOk and osp.exists(negative)
@@ -76,7 +75,6 @@ class TripletDataset(data.Dataset):
             if bOk:
                 local_list.append({"a": anchor, "p": positive, "n": negative})
 
-        #print(local_list)
         return local_list
 
     def __getitem__(self, item):
@@ -84,32 +82,22 @@ class TripletDataset(data.Dataset):
         triplet_dict = self.list[item]
         # anchor patch（锚点：可见光图像块）
         img = Image.open(triplet_dict["a"]).convert('L')
-        # img_cropped = img.crop((0, 0, self.image_size, self.image_size))
         img_cropped = img.resize((self.image_size, self.image_size))
         anchor_image = transforms.ToTensor()(img_cropped)
 
         # positive patch（正样本：同一位置经变换的近红外图像块）
         img = Image.open(triplet_dict["p"]).convert('L')
-        # img_cropped = img.crop((0, 0, self.image_size, self.image_size))
         img_cropped = img.resize((self.image_size, self.image_size))
         positive_image = transforms.ToTensor()(img_cropped)
-        # print('positive_image:',positive_image.shape)
 
         # negative patch（负样本：不同位置的近红外图像块）
         img = Image.open(triplet_dict["n"]).convert('L')
-        # img_cropped = img.crop((0, 0, self.image_size, self.image_size))
         img_cropped = img.resize((self.image_size, self.image_size))
         negative_image = transforms.ToTensor()(img_cropped)
 
         # 在第 0 维拼接三张单通道图 [1, H, W] * 3 -> [3, H, W]
         input_tensor = torch.cat([anchor_image, positive_image, negative_image])
-        # print(input_tensor.shape)
         return item, input_tensor
 
     def __len__(self):
         return self.nb_samples
-#
-# if __name__ == "__main__":
-#     train_data = '../../data/optical/train/triplets_256'
-#     image_size = 256
-#     TripletDataset(train_data,image_size)

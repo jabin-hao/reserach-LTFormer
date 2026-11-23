@@ -11,14 +11,14 @@ EPS_L2_NORM = 1e-10
 
 
 def desc_l2norm(desc):
-    """descriptors with shape NxC or NxCxHxW"""
+    """将描述子重塑为 [1, 128] 并执行 L2 归一化（保留原实现单样本推理形状）。"""
     desc = desc.view(1, 128)
     desc = desc / desc.pow(2).sum(dim=1, keepdim=True).add(EPS_L2_NORM).pow(0.5)
     return desc
 
 
 class SOSNet(nn.Module):
-    """SOSNet model definition"""
+    """SOSNet model definition（7层 CNN 描述子网络，首层含 InstanceNorm2d）"""
 
     def __init__(self, is_bias=False, is_affine=False, dim_desc=128, drop_rate=0.3):
         super(SOSNet, self).__init__()
@@ -28,6 +28,7 @@ class SOSNet(nn.Module):
         norm_layer = nn.BatchNorm2d
         activation = nn.ReLU()
 
+        # 第 1 层先用 InstanceNorm2d 对每个输入 Patch 做实例归一化，减弱亮度/对比度差异
         self.layer1 = nn.Sequential(
             nn.InstanceNorm2d(1, affine=is_affine),
             nn.Conv2d(1, 32, kernel_size=3, padding=1, bias=is_bias),
@@ -73,6 +74,7 @@ class SOSNet(nn.Module):
         return
 
     def forward(self, x):
+        """依次经过 7 层 CNN 提取特征并压缩为 128 维 L2 归一化描述子。"""
         for layer in [
             self.layer1,
             self.layer2,

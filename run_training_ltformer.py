@@ -57,12 +57,9 @@ logger.setLevel(logging.INFO)
 device = torch.device("cuda")
 warnings.filterwarnings("ignore")
 
-# print(torch.cuda.device_count())
-
-
 @hydra.main(version_base=None, config_path="config", config_name="config_train_ltformer")
 def main(cfg):
-
+    """训练主函数：由 Hydra 注入 config_train_ltformer.yaml 配置参数。"""
     logger.info("Version: " + __version__)
     dict_cfg = OmegaConf.to_container(cfg)
     cfg_pprint = json.dumps(dict_cfg, indent=4)
@@ -80,7 +77,7 @@ def main(cfg):
     margin_value = cfg.params.margin_value
     loss_weight = cfg.params.loss_weight
 
-    # gathers all epoch losses 
+    # 记录每个 epoch 的平均损失
     loss_list = []
 
     # 1. 构建训练数据集与多线程 DataLoader（每个样本含 anchor/positive/negative 3张图）
@@ -139,7 +136,6 @@ def main(cfg):
 
             # 前向传播提取描述子，输出形状：[B*3, 128]
             output = model(inputs_var_batch).to(device)
-            # print(output.shape)
 
             # 计算三元组正/负样本距离与 LT Loss
             dist_positive, dist_negative, loss = criterion(output)
@@ -156,7 +152,7 @@ def main(cfg):
             loss.backward()
             optimizer.step()
 
-            # print(prof)
+        # 每轮结束保存最新权重与优化器状态（用于断点续训）
         save_dict = {
             "epoch": epoch + 1,
             "state_dict": model.state_dict(),

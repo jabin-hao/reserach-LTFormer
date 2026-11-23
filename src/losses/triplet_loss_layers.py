@@ -23,14 +23,12 @@ LOSS_LAYER_IDS = ["HardNetLoss", "AdaptativeTripletLoss"]
 
 def loss_factory(loss_id, batch_size, margin_value, loss_weight):
     """损失函数工厂：按名称字符串返回对应的 PyTorch nn.Module 损失层。"""
-    # assert loss_id == "HardNetLoss"
     if loss_id == "HardNetLoss":
         loss_layer = HardNetLoss(
             batch_size=batch_size,
             margin=margin_value,
             loss_weight=loss_weight,
         )
-    # assert loss_id == "AdaptativeTripletLoss"
     elif loss_id == "AdaptativeTripletLoss":
         loss_layer = AdaptativeTripletLoss(
             batch_size=batch_size,
@@ -42,17 +40,17 @@ def loss_factory(loss_id, batch_size, margin_value, loss_weight):
 
 
 class HardNetLoss(torch.nn.Module):
+    """HardNet 难负样本边界损失层包装类。"""
+
     def __init__(self, batch_size, loss_weight=0.1, margin=0.2):
         torch.nn.Module.__init__(self)
 
-        # construct anchor, positive, and negative ids
+        # 按步长 3 生成一个 batch 内 anchor、positive、negative 各自的行索引
         self.anchor_ids = range(0, batch_size * 3, 3)
-        #print(self.anchor_ids)
         self.positive_ids = range(1, batch_size * 3, 3)
         self.negative_ids = range(2, batch_size * 3, 3)
 
         self.nb_anchor_samples = len(self.anchor_ids)
-        #print(self.nb_anchor_samples)
         self.nb_positive_samples = len(self.positive_ids)
         self.nb_negative_samples = len(self.negative_ids)
         self.weight = loss_weight
@@ -66,14 +64,16 @@ class HardNetLoss(torch.nn.Module):
         )
 
     def get_weight(self):
+        """返回损失权重系数。"""
         return self.weight
 
     def set_actual_labels(self, new_label):
+        """更新当前批次标签缓存。"""
         self.labels_mini_batch = new_label
         return
 
     def get_label_batch(label_data, batch_size, batch_index):
-
+        """按批次索引环形切片获取标签数据。"""
         nrof_examples = np.size(label_data, 0)
         j = batch_index * batch_size % nrof_examples
 
@@ -88,9 +88,8 @@ class HardNetLoss(torch.nn.Module):
         return batch_int
 
     def forward(self, input):
-        #print(torch.cuda.is_available())
+        """取出 batch 内的 anchor 和 positive 描述子，送入 HardNet 难负样本损失。"""
         anchors = input[self.anchor_ids, :].cuda()
-        #print(anchors)
         positives = input[self.positive_ids, :].cuda()
 
         pos, min_neg, loss = loss_HardNet(
@@ -104,7 +103,10 @@ class HardNetLoss(torch.nn.Module):
 
 #计算距离矩阵
 def distance_matrix_vector(anchor, positive):
-    """Given batch of anchor descriptors and positive descriptors calculate distance matrix"""
+    """
+    利用矩阵乘法高效计算成对欧氏距离矩阵 D[i, j] = ||anchor[i] - positive[j]||_2。
+    展开公式：||a - p||^2 = ||a||^2 + ||p||^2 - 2 * a^T p
+    """
 
     d1_sq = torch.sum(anchor * anchor, dim=1).unsqueeze(-1).cuda()
     d2_sq = torch.sum(positive * positive, dim=1).unsqueeze(-1).cuda()
@@ -114,7 +116,7 @@ def distance_matrix_vector(anchor, positive):
             + torch.t(d2_sq.repeat(1, anchor.size(0))).cuda()
             - 2.0
             * torch.bmm(anchor.unsqueeze(0).cuda(), torch.t(positive).unsqueeze(0).cuda()).squeeze(0).cuda())
-    #避免负数出现
+    #避免负数出现（浮点精度误差可能导致微小负值，用 ReLU 截断为 0）
     torch.nn.functional.relu(flag, inplace=True).cuda()
     return torch.sqrt(flag + eps).cuda()
 
@@ -123,8 +125,9 @@ def loss_HardNet(
     anchor, positive, margin=1.0, batch_reduce="min", loss_type="triplet_margin"
 ):
     """
-    HardNet margin loss - calculates loss based on distance matrix
-    based on positive distance and closest negative distance.
+    HardNet 难负样本边界损失：
+    对于每对正样本 (a_i, p_i)，在同批次所有非对应样本中搜索距离最近的“最难负样本”，
+    最大化正样本距离与最难负样本距离之间的间隔。
     """
 
     assert (
@@ -132,33 +135,28 @@ def loss_HardNet(
     ), "Input sizes between positive and negative must be equal."
     assert anchor.dim() == 2, "Input must be a 2D matrix."
     eps = 1e-8
-    #a = torch.any(torch.isnan(anchor))
-    #b = torch.any(torch.isnan(positive))
     dist_matrix = distance_matrix_vector(anchor, positive) + eps
-    #c = torch.any(torch.isnan(dist_matrix))
     eye = torch.autograd.Variable(torch.eye(dist_matrix.size(1))).cuda()
 
-    # steps to filter out same patches that occur in distance matrix as negatives
+    # 对角线元素 dist_matrix[i, i] 即为第 i 对正样本的距离 pos
     pos1 = torch.diag(dist_matrix).cuda()
-    #print(pos1)
 
+    # 给对角线（自身正样本）加上大惩罚 10，防止在找“最近负样本”时选中自己
     dist_without_min_on_diag = dist_matrix + eye * 10
+    # 过滤距离 < 0.008 的极近样本，避免重复切块被误当成难负样本
     mask = (dist_without_min_on_diag.ge(0.008).float() - 1.0) * (-1)
     mask = mask.type_as(dist_without_min_on_diag) * 10
     dist_without_min_on_diag = dist_without_min_on_diag + mask
 
-    #d = torch.any(torch.isnan(dist_without_min_on_diag)).cuda()
-
+    # 跨模态找每个 anchor 对应的最近负样本距离
     min_neg = torch.min(dist_without_min_on_diag, 1)[0].cuda()
 
+    # 同模态内部（anchor之间、positive之间）也寻找最难负样本，取三者最小值
     dist_matrix_a = distance_matrix_vector(anchor, anchor) + eps
     dist_matrix_p = distance_matrix_vector(positive, positive) + eps
     dist_without_min_on_diag_a = dist_matrix_a + eye * 10
-
-    #e = torch.any(torch.isnan(dist_matrix_p)).cuda()
-
     dist_without_min_on_diag_p = dist_matrix_p + eye * 10
-    #出现nan值
+
     min_neg_a = torch.min(dist_without_min_on_diag_a, 1)[0].cuda()
     min_neg_p = torch.t(torch.min(dist_without_min_on_diag_p, 0)[0]).cuda()
     min_neg_3 = torch.min(min_neg_p, min_neg_a).cuda()
@@ -167,9 +165,9 @@ def loss_HardNet(
     min_neg = min_neg
     pos = pos1
 
+    # 三元组 Hinge 损失：max(0, margin + d_pos - d_min_neg)
     if loss_type == "triplet_margin":
         loss = torch.clamp(margin + pos - min_neg, min=0.0).cuda()
-        #print(loss)
     elif loss_type == "softmax":
         exp_pos = torch.exp(2.0 - pos).cuda()
         exp_den = (exp_pos + torch.exp(2.0 - min_neg) + eps).cuda()
@@ -178,11 +176,11 @@ def loss_HardNet(
         loss = (torch.clamp(margin - min_neg, min=0.0) + pos).cuda()
 
     loss = torch.mean(loss).cuda()
-    #print(pos,min_neg,loss)
     return pos, min_neg, loss
 
 
 def dist_triplet(self, input):
+    """辅助函数：分别计算批内正样本对和负样本对的欧氏距离。"""
     def distance_pair(x1, x2, norm=2):
         assert x1.size() == x2.size()
         eps = 1e-4 / x1.size(1)
@@ -193,11 +191,8 @@ def dist_triplet(self, input):
     anchors = input[self.anchorIds, :]
     positives = input[self.positiveIds, :]
     negatives = input[self.negativeIds, :]
-    x1 = anchors
-    x2 = positives
-    x3 = negatives
-    dist_positive = distance_pair(x1, x2, 2)
-    dist_negative = distance_pair(x1, x3, 2)
+    dist_positive = distance_pair(anchors, positives, 2)
+    dist_negative = distance_pair(anchors, negatives, 2)
     return (dist_positive, dist_negative)
 
 
@@ -213,7 +208,6 @@ class AdaptativeTripletLoss(torch.nn.Module):
         torch.nn.Module.__init__(self)
         # 按步长 3 切分出 batch 中对应的 anchor / positive / negative 下标
         self.anchorIds = range(0, batch_size * 3, 3)
-        # print(self.anchor_ids)
         self.positiveIds = range(1, batch_size * 3, 3)
         self.negativeIds = range(2, batch_size * 3, 3)
         self.lenpositive = len(self.positiveIds)
@@ -249,21 +243,31 @@ class AdaptativeTripletLoss(torch.nn.Module):
         return batch_int
 
     def forward(self, input):
+        """
+        计算 LT Loss：
+          1. 计算正样本欧氏距离 d_p = ||a - p||_2 和负样本欧氏距离 d_n = ||a - n||_2；
+          2. 根据三元组难易程度分组（默认 'all' 使用全部样本）；
+          3. 自适应边界 margin = |dist_p + dist_n| / 2；
+          4. 优化目标 max(0, dist_p + margin - dist_n)，促使 dist_p -> 0 且 dist_n > dist_p + margin。
+        """
         margin_factor = 1
         filter_loss = False
         categories = ["all", "easy", "semihard", "hard"]
-        triplet_categorie = categories[0]
+        triplet_categorie = categories[0]                      # 默认对 batch 内全部三元组计算损失
         loss = Variable(torch.zeros(1))
         zero = Variable(torch.zeros(1)).cuda()
         anchors = input[self.anchorIds, :]
         positives = input[self.positiveIds, :]
         negatives = input[self.negativeIds, :]
 
+        # 计算锚点分别与正样本、负样本之间的 L2（欧氏）距离
         d_p = F.pairwise_distance(anchors, positives, 2)
         d_n = F.pairwise_distance(anchors, negatives, 2)
 
+        # 动态边界（自适应 margin）：随当前正负样本距离均值变化
         self.margin = margin_factor * d_p
         self.margin = abs(d_p + d_n) / 2
+        # 按三元组难度划分掩码（easy / semihard / hard）
         easy_samples = (d_p + self.margin < d_n).cpu().data.numpy().flatten()
         semihard_samples = (
             ((d_p < d_n) & (d_n < d_p + self.margin)).cpu().data.numpy().flatten()
@@ -273,14 +277,11 @@ class AdaptativeTripletLoss(torch.nn.Module):
             all = (d_p == d_p).cpu().data.numpy().flatten()
         if triplet_categorie == "easy":
             all = easy_samples
-            # without margin
-            # all = (d_p <  d_n) .cpu().data.numpy().flatten()
         if triplet_categorie == "semihard":
-            # Semihard and d_n-d_p > 0|| d_p < d_n < d_p+margin
-            # all2=np.where(np.logical_and(d_n < d_p + self.margin, d_n-d_p > 0> 0))[0]
+            # 半难样本：正样本距离小于负样本，但尚未拉开足够边界 (d_p < d_n < d_p + margin)
             all = semihard_samples
         if triplet_categorie == "hard":
-            #  Hard Triplet d_n<d_p
+            # 难样本：正样本反而比负样本更远 (d_n < d_p)
             all = hard_samples
 
         selected_triplets_ind = np.where(all == 1)
@@ -289,7 +290,7 @@ class AdaptativeTripletLoss(torch.nn.Module):
         else:
             occ_selected_triplet = len(selected_triplets_ind[0])
 
-        # Selected Triplet Data , output and labels..
+        # 提取被选中的三元组样本重新计算距离与最终自适应边界损失
         all_a = anchors[selected_triplets_ind, :]
         all_p = positives[selected_triplets_ind, :]
         all_n = negatives[selected_triplets_ind, :]
@@ -300,16 +301,16 @@ class AdaptativeTripletLoss(torch.nn.Module):
         dist_p = F.pairwise_distance(aa, pp, 2).cuda()
         dist_n = F.pairwise_distance(aa, nn, 2).cuda()
 
-        # change margin
+        # 动态更新自适应边界 margin = |dist_p + dist_n| / 2
         self.margin = abs(dist_p + dist_n) / 2
 
         if triplet_categorie == "easy":
-            loss2 = torch.max(zero, (dist_n - self.margin) - dist_p).cuda()  # +(d_aa-d_pp)
+            loss2 = torch.max(zero, (dist_n - self.margin) - dist_p).cuda()
         else:
             loss2 = torch.max(
-                zero, dist_p + self.margin.cuda() - dist_n).cuda()  # +(d_aa-d_pp) # + 0.00001 * loss_embedd
+                zero, dist_p + self.margin.cuda() - dist_n).cuda()
 
-        # Filter Valid loss!=0
+        # 是否仅对非零激活的难三元组求平均损失
         if filter_loss:
             all = (loss2 != 0).cpu().data.numpy().flatten()
             valid_loss = np.where(all == 1)[0]

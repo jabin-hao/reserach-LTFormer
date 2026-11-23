@@ -33,21 +33,18 @@ def evaluate_matches(
     nb_rejected_matches = 0
 
     for j in range(0, len(gt_keypoint_src)):
+        # gt_keypoint_dst[j] 是第 j 个源点的真实匹配坐标；gt_keypoint_dst[matches[j]] 是模型预测出的匹配坐标
         xp = int(gt_keypoint_dst[j][0])
         yp = int(gt_keypoint_dst[j][1])
-        # print(matches)
         xp2 = int(gt_keypoint_dst[matches[j]][0])
         yp2 = int(gt_keypoint_dst[matches[j]][1])
-        dist = sqrt((yp - yp2) ** 2 + (xp - xp2) ** 2)
+        dist = sqrt((yp - yp2) ** 2 + (xp - xp2) ** 2)  # 空间定位误差（单位：像素）
 
-        # print(dist)
-        # print(distance_list[j])
-        if distance_list[j] > matching_threshold:
+        if distance_list[j] > matching_threshold:        # 1. 描述子距离太大，拒绝该匹配
             nb_rejected_matches += 1
-        elif dist <= distance_matching_threshold:
-            # print("******")
+        elif dist <= distance_matching_threshold:        # 2. 接受匹配且空间位置误差达标 -> 正确匹配
             nb_true_matches += 1
-        else:
+        else:                                            # 3. 接受匹配但实际找错了点 -> 误匹配
             nb_false_matching += 1
     return nb_false_matching, nb_true_matches, nb_rejected_matches
 
@@ -62,18 +59,15 @@ def feature_extraction(patches, model, imageSize):
     for (idx, data) in enumerate(inputs1_tensors):
 
         inputs = data
-        # print(inputs.shape)
         input_var = torch.autograd.Variable(inputs)
         input_var = input_var.view(1, imageSize, imageSize)
 
         if not (list(input_var.size())[0] == 1):
             continue
 
+        # 凑齐 4D 张量 [B=1, C=1, H, W] 送入 GPU 模型推理（关闭梯度以节省显存）
         inputs_var_batch = input_var.view(1, 1, imageSize, imageSize).to('cuda')
-        # inputs_var_batch = input_var.view(1, 3, imageSize, imageSize)
-        # computed output
         with torch.no_grad():
-            # print("********")
             desc = model(inputs_var_batch).cuda()
         desc = torch.Tensor.cpu(desc).detach().numpy()
         list_desc.append(desc)
@@ -89,8 +83,8 @@ def feature_match(feature_vectors_1, feature_vectors_2, matching_threshold):
         distance_sim = []
         for j in range(0, len(feature_vectors_2)):
             sim = distance.euclidean(feature_vectors_1[i].flatten(), feature_vectors_2[j].flatten()) #欧氏距离
-            # print(sim)
             distance_sim.append(sim)
+        # 按距离从小到大排序，取最近邻（索引 0）作为匹配结果
         candidate_index = np.argsort(distance_sim)[:2] #返回的是元素值从小到大排序后的索引值的数组
         distance_list.extend([distance_sim[candidate_index[0]]])
         matched_idx.extend([candidate_index[0]])

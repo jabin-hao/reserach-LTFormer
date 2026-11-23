@@ -49,30 +49,14 @@ def main(cfg):
     logger.info(cfg_pprint)
     logger.info("Start Processing raw sequence")
 
-    input_rgb_image_lists = []
-    input_NIRS_image_lists = []
-
-
-    # for file in cfg.paths.rgb_data_dirs:
-    #     input_rgb_image_lists.append(sorted(glob.glob(file)))
-    # for input_folder2 in cfg.paths.NIRS_data_dirs:
-    #     input_NIRS_image_lists.append(sorted(glob.glob(input_folder2 + "/*.png")))
-
+    # 1. 遍历配置中的可见光与近红外序列目录
     input_rgb_image_lists = sorted(glob.glob(cfg.paths.rgb_data_dirs + "/*"))
     input_NIRS_image_lists = sorted(glob.glob(cfg.paths.NIRS_data_dirs + "/*"))
 
-    # process sequence folder one by one
-    #for input_image_list, folder_name in zip(input_rgb_image_lists, cfg.paths.rgb_data_dirs):
     assert input_rgb_image_lists
     assert input_NIRS_image_lists
 
-    # get only the folder name and create the output folder
-    # sequence_folder_name = osp.split(folder_name)[1]
-    # export_folder = osp.join(cfg.paths.export_dir, sequence_folder_name)
-    # if not osp.exists(export_folder):
-    #     os.makedirs(export_folder)
-
-    # go through the input image list
+    # 2. 逐个子序列、逐对图像进行处理
     idx = 0
     for image_path_list, image_path_NIRS_list in zip(input_rgb_image_lists, input_NIRS_image_lists):
 
@@ -80,34 +64,26 @@ def main(cfg):
         image_path_NIRS_lists = sorted(glob.glob(image_path_NIRS_list + "/*"))
 
         for image_path, image_path_NIRS in zip(image_path_lists, image_path_NIRS_lists):
-            # 读取rgb图像
-            # read and enhance current image frame
+            # 读取可见光(RGB)图像并做 LAB 空间 CLAHE 对比度增强
             image = cv2.imread(image_path, 3)
             enhanced_image = enhance_image_2(image)
-            # file_path = os.path.splitext(image_path)[0]
-            # folder_name = file_path.split('/')[-2]
-            # export_dir = osp.join(cfg.paths.export_dir,folder_name)
-            # if not osp.exists(export_dir):
-            #     os.makedirs(export_dir)
-            # 读取近红外图像
+            # 读取近红外图像并做相同增强
             image2 = cv2.imread(image_path_NIRS, 3)
             enhanced_image_NIRS = enhance_image_2(image2)
 
+            # 提取可见光图像上的 SIFT 关键点（最多 400 个）
             keypoints, _ = extract_image_keypoints(enhanced_image, cfg.params.keypoint_extractor)
             nb_keypoints = len(keypoints)
             if nb_keypoints == 0:
                 print("nb_keypoints==0")
                 continue
-            # convert keypoints to numpy fp32
             source_keypoints_coords = np.float32([el.pt for el in keypoints]).reshape(-1, 1, 2)
 
-            # keep sparse keypoints by removing closest points under threshold in a greedy way
-            # 通过以贪婪的方式删除阈值以下的最近点来保留稀疏的关键点
+            # 贪婪过滤：删除像素距离小于阈值的过密关键点，保证点分布均匀
             to_be_removed_ids = []
             for i in range(nb_keypoints):
                 for j in range(nb_keypoints):
                     if i != j and j not in to_be_removed_ids:
-                        # print(source_keypoints_coords[i])
                         dist = distance.euclidean(source_keypoints_coords[i].flatten(), source_keypoints_coords[j].flatten())
                         if dist < cfg.params.keypoint_dist_threshold:
                             to_be_removed_ids.append(j)
@@ -125,17 +101,13 @@ def main(cfg):
             nb_keypoints = len(source_keypoints_coords)
             image_height = enhanced_image.shape[0]
             image_width = enhanced_image.shape[1]
-            #print(image_height,image_width)
             (center_x, center_y) = (image_width // 2, image_height // 2)
 
-            # select random transformation between predefined transformation list
-            # 在预定义的转换列表中选择随机转换
+            # 随机从候选池中挑选一种自监督几何变换（缩放 / 旋转 / 平移）
             transformation = random.choice(cfg.params.transformation_list)
 
-            # TODO just for debug
-            # transformation = "rotation" #旋转
-
             if transformation == "rotation":
+                # 绕图像中心旋转预设角度，同步计算旋转矩阵映射关键点坐标
                 rotation_angle = random.choice(cfg.params.predefined_angle_degrees)
                 rotation_matrix = cv2.getRotationMatrix2D((center_x, center_y), rotation_angle, 1.0)
                 warped_image = cv2.warpAffine(enhanced_image_NIRS, rotation_matrix, (image_width, image_height))
@@ -145,64 +117,51 @@ def main(cfg):
                     rotated_point = rotation_matrix.dot(
                         np.array((int(source_keypoints_coords[b][0, 0]), int(source_keypoints_coords[b][0][1])) + (1,))
                     )
-                    #positive--同一位置近红外 作rotation变换
-                    xp = int(rotated_point[0])
-                    yp = int(rotated_point[1])
-                    #anchor--rgb
-                    xa = int(source_keypoints_coords[b][0][0])
-                    ya = int(source_keypoints_coords[b][0][1])
-                    #negative--其他位置的近红外
-                    xn = int(source_keypoints_coords[b + 1][0][0])
-                    yn = int(source_keypoints_coords[b + 1][0][1])
-                    z = cfg.params.patch_size  #64
+                    xp = int(rotated_point[0])                              # 正样本新坐标 x
+                    yp = int(rotated_point[1])                              # 正样本新坐标 y
+                    xa = int(source_keypoints_coords[b][0][0])              # 锚点坐标 x
+                    ya = int(source_keypoints_coords[b][0][1])              # 锚点坐标 y
+                    xn = int(source_keypoints_coords[b + 1][0][0])          # 负样本坐标 x（取下一个不同点）
+                    yn = int(source_keypoints_coords[b + 1][0][1])          # 负样本坐标 y
+                    z = cfg.params.patch_size                               # 裁剪半边长
 
-                    # check if the  patch is inside the image canvas
+                    # 检查三个裁剪窗口是否全部位于图像画布内部
                     if (
                         ((yp - z) > 0)
                         & ((xp - z) > 0)
                         & ((yp + z) < image_height)
                         & ((xp + z) < image_width)
-                        & ((ya - z) > 0) #a
-                        & ((xa - z) > 0) #a
-                        & ((ya + z) < image_height) #a
-                        & ((xa + z) < image_width) #a
+                        & ((ya - z) > 0)
+                        & ((xa - z) > 0)
+                        & ((ya + z) < image_height)
+                        & ((xa + z) < image_width)
                         & ((yn - z) > 0)
                         & ((xn - z) > 0)
                         & ((yn + z) < image_height)
                         & ((xn + z) < image_width)
                     ):
-                        # do crop patch from the  warped image
+                        # 分别裁出正样本、锚点、负样本图像块并写入磁盘
                         crop_img_p = warped_image[yp - z : yp + z, xp - z : xp + z]
                         crop_img_a = enhanced_image[ya - z : ya + z, xa - z : xa + z]
                         crop_img_n = enhanced_image_NIRS[yn - z : yn + z, xn - z : xn + z]
 
-                        # construct output filenames for triplet patches
                         curr_output_folder = osp.join(cfg.paths.export_dir,f"{idx}_{triplet_counter}")
                         filename_p = curr_output_folder + "/p.png"
                         filename_a = curr_output_folder + "/a.png"
                         filename_n = curr_output_folder + "/n.png"
 
-                        # 生成对应位置的近红外图像
-                        # crop_img_m = enhanced_image_NIRS[ya - z: ya + z, xa - z: xa + z]
-                        # curr_output_match_folder = osp.join(cfg.paths.export_match_dir,f"{idx}_{triplet_counter}")
-                        # filename_m = curr_output_match_folder + "/m.png"
-
                         if not osp.exists(curr_output_folder):
                             os.makedirs(curr_output_folder)
-                        # if not osp.exists(curr_output_match_folder):
-                        #     os.makedirs(curr_output_match_folder)
 
-                        # save the triplet patches
                         cv2.imwrite(filename_p, crop_img_p)
                         cv2.imwrite(filename_a, crop_img_a)
                         cv2.imwrite(filename_n, crop_img_n)
 
-                        # cv2.imwrite(filename_m, crop_img_m)
-
                         triplet_counter += 1
                 idx += 1
-            # -------------------------------scaling-----------------------------------------------------------------------------------
+            # ------------------------------- 缩放变换 (zoom) -------------------------------
             elif transformation == 'zoom':
+                # 随机选择一个缩放倍率，对近红外图及对应关键点同步缩放
                 zoom_tab = random.choice(cfg.params.predefined_zoom_factors)
                 zf = zoom_tab
                 transformed = clipped_zoom(enhanced_image_NIRS, zf)
@@ -213,30 +172,26 @@ def main(cfg):
                     xp, yp = zoom_coordinates(enhanced_image_NIRS, xa, ya, zf)
                     xn = int(source_keypoints_coords[b + 1][0][0])
                     yn = int(source_keypoints_coords[b + 1][0][1])
-                    z = cfg.params.patch_size  #64
+                    z = cfg.params.patch_size
 
+                    # 边界检查，防止越界切出残缺块
                     if  (
                         ((yp - z) > 0)
                         & ((xp - z) > 0)
                         & ((yp + z) < image_height)
                         & ((xp + z) < image_width)
-                        & ((ya - z) > 0) #a
-                        & ((xa - z) > 0) #a
-                        & ((ya + z) < image_height) #a
-                        & ((xa + z) < image_width) #a
+                        & ((ya - z) > 0)
+                        & ((xa - z) > 0)
+                        & ((ya + z) < image_height)
+                        & ((xa + z) < image_width)
                         & ((yn - z) > 0)
                         & ((xn - z) > 0)
                         & ((yn + z) < image_height)
                         & ((xn + z) < image_width)
                     ):
-                        # do crop patch from the  warped image
                         crop_img_p = transformed[yp - z: yp + z, xp - z: xp + z]
                         crop_img_a = enhanced_image[ya - z: ya + z, xa - z: xa + z]
                         crop_img_n = enhanced_image_NIRS[yn - z: yn + z, xn - z: xn + z]
-
-                        # crop_img_p = transformed[yp - z:yp + z, xp - z: xp + z]
-                        # crop_img_a = image_enhanced[ya - z:ya + z, xa - z: xa + z]
-                        # crop_img_n = image_enhanced[yn - z:yn + z, xn - z: xn + z]
 
                         curr_output_folder = osp.join(cfg.paths.export_dir, f"{idx}_{triplet_counter}")
                         filename_p = curr_output_folder + "/p.png"
@@ -245,23 +200,14 @@ def main(cfg):
                         if not osp.exists(curr_output_folder):
                             os.makedirs(curr_output_folder)
 
-                        # save the triplet patches
                         cv2.imwrite(filename_p, crop_img_p)
                         cv2.imwrite(filename_a, crop_img_a)
                         cv2.imwrite(filename_n, crop_img_n)
-
-                        # if not os.path.exists("/home/crns/Desktop/code/base_train1/%i_%i" % (idx, i)):
-                        #     os.makedirs("/home/crns/Desktop/code/base_train1/%i_%i" % (idx, i))
-                        # filename_p = "/home/crns/Desktop/code/base_train1/%i_%i/p.png" % (idx, i)
-                        # filename_a = "/home/crns/Desktop/code/base_train1/%i_%i/a.png" % (idx, i)
-                        # filename_n = "/home/crns/Desktop/code/base_train1/%i_%i/n.png" % (idx, i)
-                        # cv.imwrite(filename_p, crop_img_p)
-                        # cv.imwrite(filename_a, crop_img_a)
-                        # cv.imwrite(filename_n, crop_img_n)
                         triplet_counter += 1
                 idx += 1
-            # --------------------------------------------Translation---------------------------------------------------------------------
+            # ------------------------------- 平移变换 (translation) -------------------------------
             elif transformation == 'translation':
+                # 构造向右下方平移 (8, 8) 像素的仿射矩阵
                 M = np.float32([[1, 0, 8], [0, 1, 8]])
                 transformed = cv2.warpAffine(enhanced_image_NIRS, M, (image_width, image_height))
                 triplet_counter = 0
@@ -273,8 +219,9 @@ def main(cfg):
                     ya = int(source_keypoints_coords[b][0][1])
                     xn = int(source_keypoints_coords[b + 1][0][0])
                     yn = int(source_keypoints_coords[b + 1][0][1])
-                    z = cfg.params.patch_size  #64
+                    z = cfg.params.patch_size
 
+                    # 边界检查，确保裁剪块位于画布内
                     if (
                             ((yp - z) > 0)
                             & ((xp - z) > 0)
@@ -293,9 +240,6 @@ def main(cfg):
                         crop_img_p = transformed[yp - z: yp + z, xp - z: xp + z]
                         crop_img_a = enhanced_image[ya - z: ya + z, xa - z: xa + z]
                         crop_img_n = enhanced_image_NIRS[yn - z: yn + z, xn - z: xn + z]
-                        # crop_img_p = transformed[yp - z:yp + z, xp - z: xp + z]
-                        # crop_img_a = enhanced_image[ya - z:ya + z, xa - z: xa + z]
-                        # crop_img_n = enhanced_image[yn - z:yn + z, xn - z: xn + z]
 
                         curr_output_folder = osp.join(cfg.paths.export_dir, f"{idx}_{triplet_counter}")
                         filename_p = curr_output_folder + "/p.png"
@@ -304,21 +248,9 @@ def main(cfg):
                         if not osp.exists(curr_output_folder):
                             os.makedirs(curr_output_folder)
 
-                        # save the triplet patches
                         cv2.imwrite(filename_p, crop_img_p)
                         cv2.imwrite(filename_a, crop_img_a)
                         cv2.imwrite(filename_n, crop_img_n)
-
-                        # if not os.path.exists("/home/crns/Desktop/code/base_train1/%i_%i" % (idx, i)):
-                        #     os.makedirs("/home/crns/Desktop/code/base_train1/%i_%i" % (idx, i))
-                        # filename_p = "/home/crns/Desktop/code/base_train1/%i_%i/p.png" % (idx, i)
-                        # filename_a = "/home/crns/Desktop/code/base_train1/%i_%i/a.png" % (idx, i)
-                        # filename_n = "/home/crns/Desktop/code/base_train1/%i_%i/n.png" % (idx, i)
-                        #
-                        # # export the current triplet patches
-                        # cv2.imwrite(filename_p, crop_img_p)
-                        # cv2.imwrite(filename_a, crop_img_a)
-                        # cv2.imwrite(filename_n, crop_img_n)
                         triplet_counter += 1
                 idx += 1
 

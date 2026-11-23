@@ -26,7 +26,9 @@ def model_factory(model_name, model_weights_path):
     assert model_name in ACCEPTED_MODEL_NAMES
     assert osp.exists(model_weights_path)
 
+    # 读取序列化权重文件
     state_dict = torch.load(model_weights_path)
+    # 不同模型保存权重的字典结构不同：HyNet/SOSNet 为裸参数字典，其余包在 state_dict 键下
     if model_name == "HyNet":
         model = HyNet()
         model.load_state_dict(state_dict)
@@ -43,5 +45,5 @@ def model_factory(model_name, model_weights_path):
         model = ltformer_d128()
         model.load_state_dict(state_dict["state_dict"])
     else:
-        raise
+        raise ValueError(f"Unsupported model name: {model_name}")
     return model

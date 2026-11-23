@@ -37,7 +37,7 @@ PREDEFINED_TRANSLATION = 8
 
 
 def collect_images(root_dir):
-    """Recursively collect sorted image paths under root_dir."""
+    """递归收集 root_dir 下所有受支持格式的图像路径并按字典序排序。"""
     files = []
     for root, _, filenames in os.walk(root_dir):
         for fname in filenames:
@@ -47,21 +47,21 @@ def collect_images(root_dir):
 
 
 def read_image_any(path):
-    """Read image with cv2 first, falling back to tifffile for multi-band/GeoTIFFs."""
+    """优先使用 OpenCV 原深度读取；若为特殊压缩的多波段 GeoTIFF 则回退到 tifffile。"""
     img = cv2.imread(path, cv2.IMREAD_UNCHANGED)
     if img is not None:
         return img
     if tifffile is not None:
         arr = tifffile.imread(path)
         if arr.ndim == 3 and arr.shape[0] <= 16 and arr.shape[2] > 16:
-            # Convert channel-first (C, H, W) TIFF to (H, W, C)
+            # 将通道在前的 (C, H, W) 格式转为 OpenCV 使用的 (H, W, C)
             arr = np.transpose(arr, (1, 2, 0))
         return arr
     raise RuntimeError(f"Failed to read image: {path}")
 
 
 def to_uint8(arr):
-    """Safely convert 16-bit or float imagery to uint8."""
+    """将 16 位整型或浮点遥感影像安全线性拉伸为 uint8（SIFT 与 CLAHE 均要求 uint8）。"""
     if arr.dtype == np.uint8:
         return arr
     arr_f = arr.astype(np.float32)
@@ -76,7 +76,7 @@ def to_uint8(arr):
 
 
 def to_bgr_uint8(arr):
-    """Ensure image is 3-channel uint8 BGR for LAB CLAHE enhancement."""
+    """统一转换为 3 通道 uint8 BGR 图像，供后续 LAB 空间 CLAHE 增强使用。"""
     arr = to_uint8(arr)
     if arr.ndim == 2:
         return cv2.cvtColor(arr, cv2.COLOR_GRAY2BGR)
@@ -88,7 +88,7 @@ def to_bgr_uint8(arr):
 
 
 def enhance_image_fast(bgr_img):
-    """Fast equivalent of enhance_image_2 (5x5 blur + L-channel CLAHE)."""
+    """与原版 enhance_image_2 等价的快速增强函数（5x5 滤波 + LAB 空间 L 通道 CLAHE）。"""
     blurred = cv2.blur(bgr_img, (5, 5))
     lab = cv2.cvtColor(blurred, cv2.COLOR_BGR2LAB)
     l_ch, a_ch, b_ch = cv2.split(lab)
@@ -99,10 +99,11 @@ def enhance_image_fast(bgr_img):
 
 
 def filter_sparse_keypoints_fast(coords, dist_threshold):
-    """Vectorized greedy suppression of keypoints closer than dist_threshold."""
+    """向量化贪婪去重：利用广播距离平方矩阵快速剔除间距小于 dist_threshold 的过密关键点。"""
     n = len(coords)
     if n <= 1:
         return coords
+    # 利用 NumPy 广播一次算出 N x N 成对距离平方矩阵，替代双重 Python 循环
     diff = coords[:, None, :] - coords[None, :, :]
     dist_sq = np.sum(diff * diff, axis=-1)
     th_sq = dist_threshold * dist_threshold
@@ -110,12 +111,13 @@ def filter_sparse_keypoints_fast(coords, dist_threshold):
     for i in range(n):
         if removed[i]:
             continue
+        # 保留当前点 i，标记排在其后且距离过近的所有点
         removed[i + 1 :] |= dist_sq[i, i + 1 :] < th_sq
     return coords[~removed]
 
 
 def iter_tiles(img_a, img_b, tile_size):
-    """Split large images into non-overlapping tile_size x tile_size tiles."""
+    """按固定网格 (tile_size x tile_size) 将原始遥感大图切分为互不重叠的小块。"""
     h, w = img_a.shape[:2]
     if tile_size <= 0 or (h <= tile_size and w <= tile_size):
         yield 0, img_a, img_b
@@ -129,9 +131,9 @@ def iter_tiles(img_a, img_b, tile_size):
 
 
 def process_source_pair(task):
-    """Process one source image (or pair) into triplet patches inside chunk_dir."""
+    """单个工作进程任务：读取一对源图 -> 切分网格 -> SIFT 检点 -> 随机仿射变换 -> 写出三元组 PNG。"""
     src_idx, rgb_path, pair_path, chunk_dir, cfg = task
-    # Prevent OpenCV thread oversubscription across worker processes
+    # 子进程内强制 OpenCV 单线程，避免多进程+多线程争抢 CPU 导致调度开销暴增
     cv2.setNumThreads(1)
 
     raw_rgb = read_image_any(rgb_path)
@@ -141,6 +143,7 @@ def process_source_pair(task):
             raise ValueError(
                 f"rgb_nir mode requires >=4 channels (RGB+NIR), got shape {raw_rgb.shape} at {rgb_path}"
             )
+        # 剥离前 3 通道作为可见光图，第 4 通道作为近红外图
         vis_full = to_bgr_uint8(raw_rgb[:, :, :3])
         nir_full = to_bgr_uint8(raw_rgb[:, :, 3])
     else:
@@ -156,20 +159,23 @@ def process_source_pair(task):
     sift = cv2.SIFT_create(400)
     saved_count = 0
 
+    # 1. 根据图像尺寸或参数切分网格（5556x3704 -> 24 块 926x926）并逐块生成三元组
     for tile_id, vis_tile, nir_tile in iter_tiles(vis_full, nir_full, tile_size):
         enh_vis = enhance_image_fast(vis_tile)
         enh_nir = enhance_image_fast(nir_tile)
         h, w = enh_vis.shape[:2]
 
+        # 使用 SIFT 在增强后的可见光图像块中提取稀疏关键点
         kps, _ = sift.detectAndCompute(enh_vis, None)
         if not kps:
             continue
 
         coords = np.float32([kp.pt for kp in kps])
-        coords = filter_sparse_keypoints_fast(coords, dist_th)
+        coords = filter_sparse_keypoints_fast(coords, dist_th)  # 向量化剔除过密点
         if len(coords) < 2:
             continue
 
+        # 随机采样几何变换，构建变换矩阵 M（旋转 / 中心缩放 / 平移）
         trans = random.choice(TRANS_LIST)
         if trans == "rotation":
             angle = random.choice(PREDEFINED_ANGLES)
@@ -182,15 +188,17 @@ def process_source_pair(task):
 
         warped_nir = cv2.warpAffine(enh_nir, M, (w, h), flags=cv2.INTER_LINEAR)
 
+        # 利用齐次坐标矩阵乘法批量计算所有关键点变换后的精确坐标 [N, 2]
         ones = np.ones((len(coords), 1), dtype=np.float32)
         warped_coords = (M @ np.hstack([coords, ones]).T).T
 
         triplet_counter = 0
         for b in range(len(coords) - 1):
-            xa, ya = int(coords[b, 0]), int(coords[b, 1])
-            xp, yp = int(warped_coords[b, 0]), int(warped_coords[b, 1])
-            xn, yn = int(coords[b + 1, 0]), int(coords[b + 1, 1])
+            xa, ya = int(coords[b, 0]), int(coords[b, 1])           # Anchor（可见光原图坐标）
+            xp, yp = int(warped_coords[b, 0]), int(warped_coords[b, 1])  # Positive（变换后近红外坐标）
+            xn, yn = int(coords[b + 1, 0]), int(coords[b + 1, 1])   # Negative（近红外不同位置坐标）
 
+            # 确保三个局部窗口都在图像边界内，避免切出黑边或越界
             if (
                 xp > z and xp + z < w and yp > z and yp + z < h
                 and xa > z and xa + z < w and ya > z and ya + z < h
@@ -212,7 +220,7 @@ def process_source_pair(task):
 
 
 def stage_to_local_ssd(src_files, dst_dir, desc="Caching source files to local SSD"):
-    """Copy Drive files concurrently to local SSD for fast multiprocessing reads."""
+    """多线程并发将云盘源文件缓存到本地 SSD，减少多进程重复读网盘的延迟。"""
     os.makedirs(dst_dir, exist_ok=True)
     local_paths = [os.path.join(dst_dir, f"{i:06d}{os.path.splitext(p)[1]}") for i, p in enumerate(src_files)]
     pending = [(s, d) for s, d in zip(src_files, local_paths) if not os.path.exists(d)]
@@ -229,6 +237,7 @@ def stage_to_local_ssd(src_files, dst_dir, desc="Caching source files to local S
 
 
 def detect_mode_and_shape(sample_rgb_path, pair_dir):
+    """自动检测样本图像通道数与尺寸：>=4 通道走 rgb_nir 剥离模式，否则走 opt_sar 配对模式。"""
     sample = read_image_any(sample_rgb_path)
     h, w = sample.shape[:2]
     ch = 1 if sample.ndim == 2 else sample.shape[2]
@@ -245,6 +254,7 @@ def detect_mode_and_shape(sample_rgb_path, pair_dir):
 
 
 def main():
+    """命令行主入口：解析参数 -> 缓存源文件 -> 分片多进程生成并打包断点保存。"""
     parser = argparse.ArgumentParser(description="Fast multi-process & resumable LTFormer triplet generator")
     parser.add_argument("--rgb-dir", required=True, help="Directory containing RGB (or 4-band optical) images")
     parser.add_argument("--pair-dir", default="", help="Directory containing paired NIR/SAR images (for opt_sar mode)")
@@ -260,6 +270,7 @@ def main():
     parser.add_argument("--no-local-cache", action="store_true", help="Read directly from --rgb-dir without copying to SSD")
     args = parser.parse_args()
 
+    # 1. 扫描输入目录并自动判断数据模式
     rgb_files = collect_images(args.rgb_dir)
     if not rgb_files:
         raise FileNotFoundError(f"No images found under --rgb-dir: {args.rgb_dir}")
@@ -275,6 +286,7 @@ def main():
             f"Mismatched image counts: rgb={len(rgb_files)} vs pair={len(pair_files)}"
         )
 
+    # 2. 将源数据预热到本地 SSD
     if not args.no_local_cache:
         rgb_files = stage_to_local_ssd(rgb_files, os.path.join(args.cache_dir, "raw_rgb"), "Caching RGB/Optical to SSD")
         if mode == "opt_sar":
@@ -284,7 +296,7 @@ def main():
 
     os.makedirs(args.out_dir, exist_ok=True)
 
-    # Auto-choose chunk size: 5 large raw images (~120 tiles) or 100 small images per checkpoint tar
+    # 3. 自动决定每个分片处理几张源图：大图每片 5 张（约 120 块），小图每片 100 张
     chunk_size = args.chunk_size
     if chunk_size == 0:
         is_large = args.tile_size > 0 and (shape_info[0] > args.tile_size or shape_info[1] > args.tile_size)
