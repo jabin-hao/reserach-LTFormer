@@ -1,14 +1,16 @@
+# ==============================================================================
+# LTFormer 推理匹配与评估配置文件（供 run_matching_demo.py 使用）
+# ==============================================================================
 paths:
     log: "runs"
-    demo_sequence_data: "./data/optical/test_cut/"
+    demo_sequence_data: "./data/optical/test_cut/"               # 测试序列根目录（内含 rgb/、NIRS/ 和 matches/ 真值文件）
 params:
-        model_name: "LTFormer"
-        weights_path: "./models/LTFormer.pth"
-        image_size: 128
-        patch_size: 64
-        matching_threshold: 0.5
-        distance_matching_threshold: 5
-
+    model_name: "LTFormer"                                       # 通过 arch_factory.py 加载的模型名称
+    weights_path: "./models/LTFormer.pth"                        # 预训练/训练好的模型权重文件路径
+    image_size: 128                                              # 送入模型前将裁剪的 Patch 缩放到的目标尺寸 (128x128)
+    patch_size: 64                                               # 从测试图像中裁剪关键点局部块的半边长（对应 Table 2 的 64 尺度）
+    matching_threshold: 0.5                                      # 描述子欧氏距离阈值：超过该距离则认为“无法匹配（拒绝）”
+    distance_matching_threshold: 5                               # 空间位置误差阈值（像素）：用于评估预测点与真值点偏差 <=5px 才算正确
 hydra:
     job:
         chdir: true

@@ -1,5 +1,5 @@
 # --------------------------------------------------------
-# Swin Transformer
+# Swin Transformer（移位窗口层次化 Vision Transformer，用作本仓库对比基线模型）
 # Copyright (c) 2021 Microsoft
 # Licensed under The MIT License [see LICENSE for details]
 # Written by Ze Liu

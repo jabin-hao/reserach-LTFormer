@@ -1,14 +1,17 @@
+# ==============================================================================
+# 数据集生成配置文件（由 Hydra 自动加载，供 run_generate_dataset.py 使用）
+# 作用：将路径与算法超参数从 Python 代码中解耦，方便实验调参而无需改源码
+# ==============================================================================
 paths:
-    rgb_data_dirs: "./data/optical/train/pre_cut_3/rgb"
-    NIRS_data_dirs: "./data/optical/train/pre_cut_3/NIRS"
-    export_dir: "./data/optical/train/pre_cut_3/triplets_cut_256_trans"
+    rgb_data_dirs: "./data/optical/train/pre_cut_3/rgb"                   # 可见光(RGB)图像目录（支持按子序列分文件夹存放）
+    NIRS_data_dirs: "./data/optical/train/pre_cut_3/NIRS"                 # 近红外(NIRS)/SAR 图像目录（与 rgb_data_dirs 一一对应）
+    export_dir: "./data/optical/train/pre_cut_3/triplets_cut_256_trans"   # 生成的自监督三元组(a.png/p.png/n.png)输出根目录
     #export_match_dir: "./data/optical/test/matchs"
 params:
-    keypoint_extractor: "SIFT"
-    # distance in pixel
-    keypoint_dist_threshold: 3
-    patch_size: 128
-    transformation_list: ['zoom', 'rotation', 'translation']
-    predefined_angle_degrees: [5, 10, 15]
-    predefined_zoom_factors: [0.9, 0.95, 1.05, 1.1, 1.15]
-    predefined_translation_pixels: [8]
+    keypoint_extractor: "SIFT"                                            # 关键点检测器类型（当前仅实现 SIFT）
+    keypoint_dist_threshold: 3                                            # 关键点去重最小像素距离阈值（防止特征点过于扎堆）
+    patch_size: 128                                                       # 半窗口大小 z：实际裁剪区域为 (2*z) x (2*z) = 256x256
+    transformation_list: ['zoom', 'rotation', 'translation']              # 自监督合成几何变换候选池（每张图随机选一种）
+    predefined_angle_degrees: [5, 10, 15]                                 # 旋转变换角度候选值（单位：度）
+    predefined_zoom_factors: [0.9, 0.95, 1.05, 1.1, 1.15]                 # 缩放变换倍率候选值（<1 缩小，>1 放大）
+    predefined_translation_pixels: [8]                                    # 平移变换像素偏移量

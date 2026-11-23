@@ -1,3 +1,11 @@
+"""
+================================================================================
+Checkpoint 断点续训加载工具
+================================================================================
+作用：训练开始前检查输出目录是否已有上次保存的 .pth 权重文件；若有则恢复模型权重、
+      优化器状态（如 SGD 动量缓存）以及当前 epoch 轮次，实现中断后继续训练。
+================================================================================
+"""
 import argparse
 import os
 import pickle
@@ -10,6 +18,8 @@ import torch.nn as nn
 from munkres import Munkres
 import warnings
 import json
+
+logger = getLogger(__name__)
 
 
 def restart_from_checkpoint(ckp_paths, run_variables=None, **kwargs):

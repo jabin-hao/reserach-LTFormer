@@ -1,3 +1,13 @@
+"""
+================================================================================
+图像预处理、几何变换与 SIFT 关键点提取工具模块（供数据生成脚本使用）
+================================================================================
+主要功能：
+  - enhance_image / enhance_image_2：使用高斯平滑 + CLAHE（自适应直方图均衡化）增强局部对比度；
+  - zoom_coordinates / clipped_zoom：图像缩放及其对应的关键点坐标映射（原版使用 scipy.ndimage.zoom）；
+  - extract_image_keypoints：调用 OpenCV SIFT 检测最多 400 个稀疏关键点。
+================================================================================
+"""
 import cv2
 from scipy.spatial import distance
 from scipy.ndimage import zoom
@@ -6,6 +16,7 @@ import numpy as np
 
 
 def enhance_image(img):
+    """灰度图模糊 + CLAHE 对比度增强。"""
     # crop_img = img[70 : int(img.shape[0]) - 70, 50 : int(img.shape[1]) - 50]
     # gray2 = cv2.cvtColor(crop_img, cv2.COLOR_BGR2GRAY) #BGR->GRAY
     gray2 = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) #BGR->GRAY
@@ -16,6 +27,7 @@ def enhance_image(img):
 
 
 def enhance_image_2(img):
+    """彩色图转 LAB 空间，仅对亮度通道 L 做 CLAHE 增强再转回 BGR（论文数据生成默认增强方式）。"""
     # 裁剪图像
     # crop_img = img[70:img.shape[0] - 70, 50:img.shape[1] - 50]
     # 对彩色图像进行平滑处理
@@ -131,6 +143,7 @@ def clipped_zoom(img, zoom_factor, **kwargs):
 
 
 def extract_image_keypoints(image, extractor_id):
+    """使用 SIFT 算法提取最多 400 个关键点（只用其坐标位置，不用于描述子匹配）。"""
     assert extractor_id == "SIFT"
     sift = cv2.SIFT_create(400)
     #sift = cv2.SIFT_create(400)

@@ -1,22 +1,25 @@
+# ==============================================================================
+# LTFormer 模型训练配置文件（供 run_training_ltformer.py 使用）
+# ==============================================================================
 paths:
-    log: "runs"
-    train_data: "./data/optical/train/triplets_cut_256_new"
-    output_dir: "./outputs/2024-01-11/13-09-49/"
+    log: "runs"                                                  # TensorBoard 日志目录前缀
+    train_data: "./data/optical/train/triplets_cut_256_new"      # 训练三元组根目录（包含若干子文件夹，每个内含 a/p/n.png）
+    output_dir: "./outputs/2024-01-11/13-09-49/"                 # 历史输出目录参考
 
 params:
-    model: "LTFormer"
-    loss_layer: "AdaptativeTripletLoss"
-    # loss_layer: "HardNetLoss"
+    model: "LTFormer"                                            # 保存 Checkpoint 时的模型文件名前缀
+    loss_layer: "AdaptativeTripletLoss"                          # 训练损失函数：论文提出的 LT Loss（自适应边界三元组损失）
+    # loss_layer: "HardNetLoss"                                  # 备选基线损失：HardNet 难负样本边界损失
 
-    nb_epoch: 50
-    lr: 1e-3
-    batch_size: 256
-    image_size: 128
-    margin_value: 1
-    loss_weight: 0.5
-    momentum: 0.9
-    weight_decay: 1e-4
-    checkpoint_freq: 10
+    nb_epoch: 50                                                 # 总训练轮数（对应论文第 4 节实验设置）
+    lr: 1e-3                                                     # SGD 初始学习率 (0.001)
+    batch_size: 256                                              # 批大小（每次迭代取 256 组三元组，即 768 个 Patch）
+    image_size: 128                                              # 送入网络的 Patch 输入分辨率 (128x128 灰度图)
+    margin_value: 1                                              # 边界超参（HardNetLoss 中使用；AdaptativeTripletLoss 会动态计算）
+    loss_weight: 0.5                                             # 损失权重系数
+    momentum: 0.9                                                # SGD 动量因子
+    weight_decay: 1e-4                                           # L2 权重衰减（防止过拟合）
+    checkpoint_freq: 10                                          # 每隔多少个 epoch 额外备份一次带轮数编号的权重
 hydra:
     job:
-        chdir: true
+        chdir: true                                              # Hydra 运行时自动切换到 outputs/日期/时间 目录保存日志与权重

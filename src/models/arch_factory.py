@@ -1,3 +1,14 @@
+"""
+================================================================================
+模型工厂模块（Factory Pattern）
+================================================================================
+作用：根据配置中的模型名称字符串（model_name）和权重文件路径（model_weights_path），
+      统一实例化对应网络并加载权重，方便在评估脚本中一键切换对比不同模型。
+注意：不同作者开源的 .pth 权重字典格式略有差异：
+  - HyNet / SOSNet 直接保存了 state_dict；
+  - HardNet128 / SwinTransformer / LTFormer 将权重包在 checkpoint["state_dict"] 键下。
+================================================================================
+"""
 import os.path as osp
 import torch
 
@@ -11,6 +22,7 @@ ACCEPTED_MODEL_NAMES = ["HyNet", "SOSNet", "HardNet128","SwinTransformer", "LTFo
 
 
 def model_factory(model_name, model_weights_path):
+    """根据 model_name 创建网络结构并加载预训练权重。"""
     assert model_name in ACCEPTED_MODEL_NAMES
     assert osp.exists(model_weights_path)
 

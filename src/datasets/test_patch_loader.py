@@ -1,3 +1,16 @@
+"""
+================================================================================
+测试/评估阶段图像对与关键点局部 Patch 加载器（PyTorch Dataset）
+================================================================================
+目录结构约定：
+  root_path/
+    └── 序列名/
+         ├── rgb/<子文件夹>/<图像名>.png     (源图像：可见光)
+         ├── NIRS/<子文件夹>/<图像名>.png    (目标图像：近红外)
+         └── matches/<子文件夹>/<图像名>.txt (真值匹配坐标：每行 x_src y_src x_dst y_dst)
+作用：读取成对图像及真值关键点，按 patch_size 裁剪局部小块供 run_matching_demo.py 评估。
+================================================================================
+"""
 import numpy as np
 
 import torch
@@ -12,7 +25,7 @@ import tqdm
 
 
 class PatchDataset(Dataset):
-    """Sparse correspondences dataset."""
+    """Sparse correspondences dataset. 稀疏对应点评估数据集"""
 
     def __init__(self, root_path, patch_size):
         self.image_name = []

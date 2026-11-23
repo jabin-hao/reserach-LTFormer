@@ -1,3 +1,13 @@
+"""
+================================================================================
+推理阶段特征提取、最近邻匹配与定量指标评估工具模块
+================================================================================
+核心函数说明：
+  - feature_extraction()：批量将局部 Patch 送入模型提取 128 维描述子向量；
+  - feature_match()     ：计算两组描述子两两欧氏距离，为左图每个点找右图距离最近的匹配点；
+  - evaluate_matches()  ：根据距离阈值与像素位置误差统计 Precision 和 Matching Score 所需计数。
+================================================================================
+"""
 import torch
 from scipy.spatial import distance
 import numpy as np
@@ -12,6 +22,12 @@ def evaluate_matches(
     distance_list,
     matching_threshold,
 ):
+    """
+    统计匹配评估指标（对应论文 Table 2 ~ Table 7）：
+      - nb_rejected_matches ：描述子欧氏距离 > matching_threshold（被拒绝的点对）
+      - nb_true_matches     ：未被拒绝 且 预测点与真值坐标空间误差 <= distance_matching_threshold
+      - nb_false_matching   ：未被拒绝 但 空间误差超标（误匹配）
+    """
     nb_false_matching = 0
     nb_true_matches = 0
     nb_rejected_matches = 0
@@ -37,6 +53,7 @@ def evaluate_matches(
 
 
 def feature_extraction(patches, model, imageSize):
+    """推理提特征：逐个 Patch 转为 [1, 1, imageSize, imageSize] 送入模型并转回 NumPy 描述子列表。"""
     list_desc = []
     model.eval()
 
@@ -65,6 +82,7 @@ def feature_extraction(patches, model, imageSize):
 
 
 def feature_match(feature_vectors_1, feature_vectors_2, matching_threshold):
+    """暴力最近邻匹配：计算两组描述子之间的两两欧氏距离，返回最小距离索引及距离值。"""
     matched_idx = []
     distance_list = []
     for i in range(0, len(feature_vectors_1)):

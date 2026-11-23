@@ -1,3 +1,17 @@
+"""
+================================================================================
+三元组度量学习损失函数模块（工厂模式 + HardNetLoss + LT Loss）
+================================================================================
+核心设计模式：【工厂模式 (Factory Pattern)】
+  通过 loss_factory(loss_id, ...) 根据配置文件字符串动态实例化不同损失层，
+  方便做表 6 中的损失函数消融实验（对比 HardNetLoss 与 AdaptativeTripletLoss）。
+
+包含两种核心损失：
+  1. HardNetLoss：在每个 batch 中寻找最难负样本（距离最近的非匹配点）计算边界损失；
+  2. AdaptativeTripletLoss（论文提出的 LT Loss）：利用动态边界 margin = |d_p + d_n| / 2
+     自适应调整正负样本间隔，进一步拉近同一地物的跨模态描述子、推远异地物描述子。
+================================================================================
+"""
 import torch
 from torch.autograd import Variable
 import torch.nn.functional as F
@@ -8,6 +22,7 @@ LOSS_LAYER_IDS = ["HardNetLoss", "AdaptativeTripletLoss"]
 
 
 def loss_factory(loss_id, batch_size, margin_value, loss_weight):
+    """损失函数工厂：按名称字符串返回对应的 PyTorch nn.Module 损失层。"""
     # assert loss_id == "HardNetLoss"
     if loss_id == "HardNetLoss":
         loss_layer = HardNetLoss(
@@ -187,9 +202,16 @@ def dist_triplet(self, input):
 
 
 class AdaptativeTripletLoss(torch.nn.Module):
+    """
+    论文提出的 LT Loss（自适应边界三元组损失）。
+    输入形状为 [batch_size * 3, 128]，其中按每 3 个样本一组交错排列：
+      - 索引 0, 3, 6, ... -> Anchor   (可见光锚点描述子)
+      - 索引 1, 4, 7, ... -> Positive (近红外正样本描述子)
+      - 索引 2, 5, 8, ... -> Negative (近红外负样本描述子)
+    """
     def __init__(self, batch_size, lossweight=0.1, margin=0.2):
         torch.nn.Module.__init__(self)
-        # print("anchorIds" ,anchorIds )
+        # 按步长 3 切分出 batch 中对应的 anchor / positive / negative 下标
         self.anchorIds = range(0, batch_size * 3, 3)
         # print(self.anchor_ids)
         self.positiveIds = range(1, batch_size * 3, 3)

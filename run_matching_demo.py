@@ -1,7 +1,24 @@
+"""
+================================================================================
+LTFormer 推理匹配与定量评估演示脚本
+================================================================================
+在项目流水线中的位置：【步骤 3 - 模型测试、指标评估与匹配可视化】
+工作流程：
+  1. 通过 model_factory 加载训练好的模型权重（如 LTFormer / HardNet / SOSNet / HyNet）；
+  2. PatchDataset 读取测试图像对及真值匹配点坐标，裁剪两张图的关键点局部 Patch；
+  3. feature_extraction() 调用模型把所有局部 Patch 编码为 128 维特征描述子；
+  4. feature_match() 计算两组描述子的两两欧氏距离，寻找最近邻匹配点对；
+  5. evaluate_matches() 统计 Precision（精准率）和 Matching Score（匹配得分），
+     并在拼接图像上绘制绿线（正确匹配）与红线（错误匹配）保存可视化结果。
+================================================================================
+"""
 import os
 import logging
 
-from _version import __version__
+try:
+    from _version import __version__
+except ImportError:
+    __version__ = "1.0.0"
 import hydra
 import json
 from omegaconf import OmegaConf
@@ -17,8 +34,9 @@ import cv2
 from math import sqrt
 
 
-# 设置GPU卡号
-os.environ["CUDA_VISIBLE_DEVICES"] = "3"
+# 设置GPU卡号（仅在多卡环境且未外部指定时使用卡3，兼容Colab单卡）
+if "CUDA_VISIBLE_DEVICES" not in os.environ and torch.cuda.device_count() > 3:
+    os.environ["CUDA_VISIBLE_DEVICES"] = "3"
 writer = SummaryWriter()
 logger = logging.getLogger("Demo_matching")
 logger.setLevel(logging.INFO)

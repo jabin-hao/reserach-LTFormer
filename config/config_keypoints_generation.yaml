@@ -1,18 +1,20 @@
+# ==============================================================================
+# 测试集关键点/三元组生成配置文件（用于测试集 test_cut / test_full 预处理）
+# ==============================================================================
 paths:
-    rgb_data_dirs: "./data/optical/test_cut/test_1/rgb"
-    NIRS_data_dirs: "./data/optical/test_cut/test_1/NIRS"
-    export_dir: "./data/optical/test_cut/triplets"
-    export_match_dir: "./data/optical/test_cut/test_1/matches"
+    rgb_data_dirs: "./data/optical/test_cut/test_1/rgb"          # 测试集可见光图像路径
+    NIRS_data_dirs: "./data/optical/test_cut/test_1/NIRS"        # 测试集近红外图像路径
+    export_dir: "./data/optical/test_cut/triplets"               # 测试三元组导出路径
+    export_match_dir: "./data/optical/test_cut/test_1/matches"   # 真实匹配点对(Ground Truth)保存路径
     # rgb_data_dirs: "./data/optical/test_full/test_1/rgb"
     # NIRS_data_dirs: "./data/optical/test_full/test_1/NIRS"
     # export_dir: "./data/optical/test_full/triplets"
     # export_match_dir: "./data/optical/test_full/test_1/matches"
 params:
-    keypoint_extractor: "SIFT"
-    # distance in pixel
-    keypoint_dist_threshold: 3
-    patch_size: 128
-    transformation_list: ['zoom', 'rotation', 'translation']
-    predefined_angle_degrees: [5, 10, 15]
-    predefined_zoom_factors: [0.9, 0.95, 1.05, 1.1, 1.15]
-    predefined_translation_pixels: [8]
+    keypoint_extractor: "SIFT"                                   # 关键点提取算法
+    keypoint_dist_threshold: 3                                   # 关键点最小间距阈值（像素）
+    patch_size: 128                                              # 裁剪半边长
+    transformation_list: ['zoom', 'rotation', 'translation']     # 随机几何变换类型
+    predefined_angle_degrees: [5, 10, 15]                        # 候选旋转角
+    predefined_zoom_factors: [0.9, 0.95, 1.05, 1.1, 1.15]        # 候选缩放比例
+    predefined_translation_pixels: [8]                           # 候选平移像素数

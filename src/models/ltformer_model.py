@@ -1,5 +1,50 @@
+"""
+================================================================================
+LTFormer 核心网络架构实现（基于 PVTv2 改造的轻量级金字塔 Vision Transformer）
+================================================================================
+对应论文：Table 1（4 级金字塔结构配置）与 Fig. 1（特征描述子提取模块）。
+整体数据流（以默认模型 ltformer_d128，输入 1x128x128 灰度 Patch 为例）：
+  1. input_norm()     ：对每个 Patch 独立做减均值除标准差，削弱跨模态整体明暗差异；
+  2. 4 个金字塔 Stage ：每个 Stage = OverlapPatchEmbed(重叠卷积降采样) + 2层 Block；
+     - Block 内含空间缩减自注意力 Attention(通过 sr_ratio 压缩 K/V 节省算力)
+       和带 3x3 深度卷积 DWConv 的 Mlp(增强局部空间感应，省去显式位置编码)；
+     - 分辨率变化：128x128 -> 32x32(C=16) -> 16x16(C=32) -> 8x8(C=64) -> 4x4(C=128)；
+  3. 全局平均池化     ：对最后 4x4=16 个 Token 取均值 (x.mean(dim=1))，得到 128 维向量；
+  4. L2Norm()         ：将 128 维向量归一化到单位超球面上（模长为 1），作为最终描述子。
+================================================================================
+"""
 import torch
+"""
+================================================================================
+LTFormer 核心网络架构实现（基于 PVTv2 改造的轻量级金字塔 Vision Transformer）
+================================================================================
+对应论文：Table 1（4 级金字塔结构配置）与 Fig. 1（特征描述子提取模块）。
+整体数据流（以默认模型 ltformer_d128，输入 1x128x128 灰度 Patch 为例）：
+  1. input_norm()     ：对每个 Patch 独立做减均值除标准差，削弱跨模态整体明暗差异；
+  2. 4 个金字塔 Stage ：每个 Stage = OverlapPatchEmbed(重叠卷积降采样) + 2层 Block；
+     - Block 内含空间缩减自注意力 Attention(通过 sr_ratio 压缩 K/V 节省算力)
+       和带 3x3 深度卷积 DWConv 的 Mlp(增强局部空间感应，省去显式位置编码)；
+     - 分辨率变化：128x128 -> 32x32(C=16) -> 16x16(C=32) -> 8x8(C=64) -> 4x4(C=128)；
+  3. 全局平均池化     ：对最后 4x4=16 个 Token 取均值 (x.mean(dim=1))，得到 128 维向量；
+  4. L2Norm()         ：将 128 维向量归一化到单位超球面上（模长为 1），作为最终描述子。
+================================================================================
+"""
 import torch.nn as nn
+"""
+================================================================================
+LTFormer 核心网络架构实现（基于 PVTv2 改造的轻量级金字塔 Vision Transformer）
+================================================================================
+对应论文：Table 1（4 级金字塔结构配置）与 Fig. 1（特征描述子提取模块）。
+整体数据流（以默认模型 ltformer_d128，输入 1x128x128 灰度 Patch 为例）：
+  1. input_norm()     ：对每个 Patch 独立做减均值除标准差，削弱跨模态整体明暗差异；
+  2. 4 个金字塔 Stage ：每个 Stage = OverlapPatchEmbed(重叠卷积降采样) + 2层 Block；
+     - Block 内含空间缩减自注意力 Attention(通过 sr_ratio 压缩 K/V 节省算力)
+       和带 3x3 深度卷积 DWConv 的 Mlp(增强局部空间感应，省去显式位置编码)；
+     - 分辨率变化：128x128 -> 32x32(C=16) -> 16x16(C=32) -> 8x8(C=64) -> 4x4(C=128)；
+  3. 全局平均池化     ：对最后 4x4=16 个 Token 取均值 (x.mean(dim=1))，得到 128 维向量；
+  4. L2Norm()         ：将 128 维向量归一化到单位超球面上（模长为 1），作为最终描述子。
+================================================================================
+"""
 import torch.nn.functional as F
 from functools import partial
 
@@ -279,22 +324,26 @@ class PyramidVisionTransformerV2(nn.Module):
         self.head = nn.Linear(self.embed_dim, num_classes) if num_classes > 0 else nn.Identity()
 
     def forward_features(self, x):
+        """依次通过 4 个金字塔 Stage 提取多尺度特征，最后全局平均池化输出 [B, embed_dims[-1]]。"""
         B = x.shape[0]
 
         for i in range(self.num_stages):
             patch_embed = getattr(self, f"patch_embed{i + 1}")
             block = getattr(self, f"block{i + 1}")
             norm = getattr(self, f"norm{i + 1}")
-            x, H, W = patch_embed(x)
+            x, H, W = patch_embed(x)               # 卷积下采样并展平为序列 [B, H*W, C]
             for blk in block:
-                x = blk(x, H, W)
+                x = blk(x, H, W)                   # 经过 L_i 个轻量级 Transformer Block
             x = norm(x)
             if i != self.num_stages - 1:
+                # 前 3 个 Stage 结束后还原回二维特征图 [B, C, H, W]，送入下一级卷积嵌入
                 x = x.reshape(B, H, W, -1).permute(0, 3, 1, 2).contiguous()
 
+        # 论文核心改动：去掉分类头，直接对序列 Token 维取平均得到紧凑描述子向量
         return x.mean(dim=1)
 
     def input_norm(self, x):
+        """逐样本（per-patch）标准化：减弱可见光与近红外图像的整体灰度偏移与对比度差异。"""
         flat = x.view(x.size(0), -1)
         mp = torch.mean(flat, dim=1)
         sp = torch.std(flat, dim=1) + 1e-7
@@ -303,6 +352,7 @@ class PyramidVisionTransformerV2(nn.Module):
         ) / sp.detach().unsqueeze(-1).unsqueeze(-1).unsqueeze(1).expand_as(x)
 
     def forward(self, x):
+        """前向传播：Patch 标准化 -> 金字塔 Transformer 提取特征 -> L2 归一化。"""
         x = self.forward_features(self.input_norm(x))
         # x = self.forward_features(x)
         return L2Norm()(x)
@@ -346,6 +396,7 @@ def _conv_filter(state_dict, patch_size=16):
 
 @register_model
 def ltformer_d128(pretrained=False, **kwargs):
+    """论文默认配置（对应 Table 1）：输出 128 维特征描述子。"""
     model = PyramidVisionTransformerV2(
         patch_size=4, embed_dims=[16, 32, 64, 128], num_heads=[1, 2, 4, 8], mlp_ratios=[8, 8, 4, 4], qkv_bias=True,
         norm_layer=partial(nn.LayerNorm, eps=1e-6), depths=[2, 2, 2, 2], sr_ratios=[8, 4, 2, 1],
@@ -356,6 +407,7 @@ def ltformer_d128(pretrained=False, **kwargs):
 
 @register_model
 def ltformer_d256(pretrained=False, **kwargs):
+    """256 维描述子消融实验变体（对应 Table 7）。"""
     model = PyramidVisionTransformerV2(
         patch_size=4, embed_dims=[32, 64, 128, 256], num_heads=[1, 2, 4, 8], mlp_ratios=[8, 8, 4, 4], qkv_bias=True,
         norm_layer=partial(nn.LayerNorm, eps=1e-6), depths=[2, 2, 2, 2], sr_ratios=[8, 4, 2, 1],
@@ -366,6 +418,7 @@ def ltformer_d256(pretrained=False, **kwargs):
 
 @register_model
 def ltformer_d512(pretrained=False, **kwargs):
+    """512 维描述子扩展变体。"""
     model = PyramidVisionTransformerV2(
         patch_size=4, embed_dims=[64, 128, 256, 512], num_heads=[1, 2, 4, 8], mlp_ratios=[8, 8, 4, 4], qkv_bias=True,
         norm_layer=partial(nn.LayerNorm, eps=1e-6), depths=[2, 2, 2, 2], sr_ratios=[8, 4, 2, 1],

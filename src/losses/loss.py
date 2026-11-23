@@ -1,9 +1,15 @@
+"""
+================================================================================
+早期辅助损失类文件（保留兼容用，实际训练默认调用 triplet_loss_layers.py）
+================================================================================
+"""
 import torch
 import numpy as np
 
 
 class HardNnetLoss(torch.nn.Module):
     """
+    早期 HardNet 损失封装草稿（注意类名拼写 HardNnetLoss，实际训练请见 triplet_loss_layers.py）。
     from Similarity_measures import mutual_info,SIFT_features
     """
 

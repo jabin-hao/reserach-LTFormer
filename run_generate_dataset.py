@@ -1,9 +1,29 @@
+"""
+================================================================================
+自监督三元组数据集生成脚本（论文原版，单进程串行）
+================================================================================
+在项目流水线中的位置：【步骤 1 - 离线数据准备】
+核心思路（为什么叫自监督）：
+  1. 输入：预先空间对齐（像素级配准）的可见光(RGB)图像与近红外(NIRS)图像对；
+  2. 选点：使用 SIFT 在可见光图像上提取稀疏关键点坐标；
+  3. 造变换：对近红外图像随机施加已知的仿射/缩放变换（旋转 / 缩放 / 平移）；
+  4. 切三元组：
+     - a.png (Anchor 锚点)   ：可见光原图在关键点处切出的局部块；
+     - p.png (Positive 正样本)：变换后近红外图在“同一地理位置的对应新坐标”切出的块；
+     - n.png (Negative 负样本)：近红外原图在“另一个不同关键点”处切出的块。
+注意：若在 Colab 上处理 WHU-OPT-SAR 大图，推荐使用提速数十倍且支持断点续传的
+      run_generate_dataset_fast.py。
+================================================================================
+"""
 import glob
 import os
 import os.path as osp
 import logging
 
-from _version import __version__
+try:
+    from _version import __version__
+except ImportError:
+    __version__ = "1.0.0"
 import hydra
 import json
 from omegaconf import OmegaConf
@@ -22,6 +42,7 @@ logger.setLevel(logging.INFO)
 
 @hydra.main(version_base=None, config_path="config", config_name="config_dataset")
 def main(cfg):
+    """Hydra 入口函数：自动读取 config/config_dataset.yaml 注入 cfg 对象。"""
     logger.info("Version: " + __version__)
     dict_cfg = OmegaConf.to_container(cfg)
     cfg_pprint = json.dumps(dict_cfg, indent=4)
