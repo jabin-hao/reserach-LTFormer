@@ -11,17 +11,12 @@
 作用：读取成对图像及真值关键点，按 patch_size 裁剪局部小块供 run_matching_demo.py 评估。
 ================================================================================
 """
-import numpy as np
-
-import torch
 import os
-import cv2 as cv
-from torch.utils.data import Dataset
-from scipy.spatial import distance
-from numpy import loadtxt
-import glob
 import os.path as osp
-import tqdm
+import glob
+import cv2 as cv
+from numpy import loadtxt
+from torch.utils.data import Dataset
 
 
 class PatchDataset(Dataset):
@@ -77,21 +72,6 @@ class PatchDataset(Dataset):
         image_enhanced = clahe.apply(gray2)
         return image_enhanced
     
-    def enhance_2(self,img):
-        # 将图像转换为 LAB 颜色空间
-        lab = cv.cvtColor(img, cv.COLOR_BGR2LAB)
-        # 将 LAB 图像分离为 L、A、B 三个通道
-        l, a, b = cv.split(lab)
-        # 创建 CLAHE 对象
-        clahe = cv.createCLAHE(clipLimit=5.0)
-        # 对 L 通道进行直方图均衡化
-        l_enhanced = clahe.apply(l)
-        # 合并增强后的 L 通道和原始的 A、B 通道
-        lab_enhanced = cv.merge((l_enhanced, a, b))
-        # 将增强后的 LAB 图像转换回彩色图像
-        image_enhanced = cv.cvtColor(lab_enhanced, cv.COLOR_LAB2BGR)
-        return image_enhanced
-
     def __getitem__(self, idx):
         """读取第 idx 对测试图像和真值点对文件，并按 patch_size 裁剪成对的局部 Patch。"""
         frame_src = cv.imread(self.data[idx]["src_frame"], 3) #flag=3 原深度 3通道

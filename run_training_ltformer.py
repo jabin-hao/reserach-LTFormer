@@ -59,23 +59,23 @@ warnings.filterwarnings("ignore")
 
 @hydra.main(version_base=None, config_path="config", config_name="config_train_ltformer")
 def main(cfg):
-    """训练主函数：由 Hydra 注入 config_train_ltformer.yaml 配置参数。"""
+    """训练主函数：由 Hydra 自动读取 config/config_train_ltformer.yaml 并注入到参数 cfg 中。"""
     logger.info("Version: " + __version__)
-    dict_cfg = OmegaConf.to_container(cfg)
-    cfg_pprint = json.dumps(dict_cfg, indent=4)
-    logger.info(cfg_pprint)
+    dict_cfg = OmegaConf.to_container(cfg)                   # 将 Hydra 配置对象转为普通 Python 字典
+    cfg_pprint = json.dumps(dict_cfg, indent=4)              # 将字典格式化为带 4 空格缩进的 JSON 字符串
+    logger.info(cfg_pprint)                                  # 打印本次训练使用的完整配置，便于实验复现与核对
 
-    output_dir = get_cwd()
+    output_dir = get_cwd()                                   # 获取 Hydra 本次运行的独立输出目录（用于存权重与日志），并切回项目根目录
     logger.info(f"Working dir: {os.getcwd()}")
     logger.info(f"Export dir: {output_dir}")
     logger.info("Loading parameters from config file")
-    data_dir_list = cfg.paths.train_data
-    nb_epoch = cfg.params.nb_epoch
-    batch_size = cfg.params.batch_size
-    image_size = cfg.params.image_size
-    initial_lr = cfg.params.lr
-    margin_value = cfg.params.margin_value
-    loss_weight = cfg.params.loss_weight
+    data_dir_list = cfg.paths.train_data                     # 训练集三元组所在根目录（含 a.png / p.png / n.png 子文件夹）
+    nb_epoch = cfg.params.nb_epoch                           # 总训练轮数（默认 50 个 epoch）
+    batch_size = cfg.params.batch_size                       # 每批读取的三元组组数（默认 256 组，即 256*3=768 张 Patch）
+    image_size = cfg.params.image_size                       # 送入网络的 Patch 缩放尺寸（默认 128，即 128x128）
+    initial_lr = cfg.params.lr                               # 优化器初始学习率（默认 0.001）
+    margin_value = cfg.params.margin_value                   # 边界超参（HardNetLoss 使用固定 margin；AdaptativeTripletLoss 内部会动态计算）
+    loss_weight = cfg.params.loss_weight                     # 损失权重系数（预留扩展参数）
 
     # 记录每个 epoch 的平均损失
     loss_list = []

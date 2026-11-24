@@ -1,18 +1,13 @@
 """
 ================================================================================
-图像预处理、几何变换与 SIFT 关键点提取工具模块（供数据生成脚本使用）
+图像预处理与 SIFT 关键点提取工具模块（供数据生成脚本使用）
 ================================================================================
 主要功能：
-  - enhance_image / enhance_image_2：使用高斯平滑 + CLAHE（自适应直方图均衡化）增强局部对比度；
-  - zoom_coordinates / clipped_zoom：图像缩放及其对应的关键点坐标映射（原版使用 scipy.ndimage.zoom）；
+  - enhance_image / enhance_image_2：使用均值平滑 + CLAHE（自适应直方图均衡化）增强局部对比度；
   - extract_image_keypoints：调用 OpenCV SIFT 检测最多 400 个稀疏关键点。
 ================================================================================
 """
 import cv2
-from scipy.spatial import distance
-from scipy.ndimage import zoom
-import random
-import numpy as np
 
 
 def enhance_image(img):
@@ -47,92 +42,9 @@ def enhance_image_2(img):
 
 
 
-def zoom_coordinates(img, x, y, zoom_factor, **kwargs):
-    """
-    计算原图关键点 (x, y) 在经历以图像中心为原点的缩放变换 (zoom_factor) 后的新坐标 (x1, y1)。
-    注：原代码内部也执行了 scipy.ndimage.zoom(img)（但未返回图像），因此性能开销较大。
-    """
-    h, w = img.shape[:2]
-
-    # 多通道图像只缩放前两维 (H, W)，通道维缩放因子设为 1
-    zoom_tuple = (zoom_factor,) * 2 + (1,) * (img.ndim - 2)
-
-    # 情况 1：缩小（zoom_factor < 1），四周补黑边（Zero-padding）保持输出尺寸仍为 (h, w)
-    if zoom_factor < 1:
-
-        zh = int(np.round(h * zoom_factor))
-        zw = int(np.round(w * zoom_factor))
-        top = (h - zh) // 2
-        left = (w - zw) // 2
-        # 按缩放后在画布上的居中偏移计算对应的新坐标
-        y1 = (y + ((h - zh) // 2)) * zoom_factor
-        x1 = (x + ((w - zw) // 2)) * zoom_factor
-        out = np.zeros_like(img)
-        out[top : top + zh, left : left + zw] = zoom(img, zoom_tuple, **kwargs)
-        y1 = np.int32(y1)
-        x1 = np.int32(x1)
-
-    # 情况 2：放大（zoom_factor >= 1），先截取中心 (h/zf, w/zf) 区域，再放大回 (h, w)
-    elif zoom_factor >= 1:
-
-        zh = int(np.round(h / zoom_factor))
-        zw = int(np.round(w / zoom_factor))
-        top = (h - zh) // 2
-        left = (w - zw) // 2
-        # 减去裁剪起点的左上角偏移后再乘以放大倍率
-        y1 = (y - ((h - zh) // 2)) * zoom_factor
-        x1 = (x - ((w - zw) // 2)) * zoom_factor
-        out = zoom(img[top : top + zh, left : left + zw], zoom_tuple, **kwargs)
-        y1 = np.int32(y1)
-        x1 = np.int32(x1)
-
-    # 情况 3：倍率为 1 时坐标不变
-    else:
-        out = img
-    return x1, y1
-
-
-def clipped_zoom(img, zoom_factor, **kwargs):
-    """
-    保持输出图像分辨率仍为 (h, w) 的中心裁剪/填充缩放函数（原版调用 scipy.ndimage.zoom）。
-    """
-    h, w = img.shape[:2]
-
-    # 仅对空间高宽维度缩放，通道维保持不变
-    zoom_tuple = (zoom_factor,) * 2 + (1,) * (img.ndim - 2)
-
-    # 缩小分支：整图缩小后居中填入全零黑底画布
-    if zoom_factor < 1:
-
-        zh = int(np.round(h * zoom_factor))
-        zw = int(np.round(w * zoom_factor))
-        top = (h - zh) // 2
-        left = (w - zw) // 2
-        out = np.zeros_like(img)
-        out[top : top + zh, left : left + zw] = zoom(img, zoom_tuple, **kwargs)
-
-    # 放大分支：截取中心区域放大，若因取整导致略大于 (h, w) 再做中心裁剪对齐
-    elif zoom_factor >= 1:
-
-        zh = int(np.round(h / zoom_factor))
-        zw = int(np.round(w / zoom_factor))
-        top = (h - zh) // 2
-        left = (w - zw) // 2
-
-        out = zoom(img[top : top + zh, left : left + zw], zoom_tuple, **kwargs)
-
-        trim_top = (out.shape[0] - h) // 2
-        trim_left = (out.shape[1] - w) // 2
-        out = out[trim_top : trim_top + h, trim_left : trim_left + w]
-
-    else:
-        out = img
-    return out
-
-
 def extract_image_keypoints(image, extractor_id):
     """使用 SIFT 算法提取最多 400 个关键点（只用其坐标位置，不用于描述子匹配）。"""
     assert extractor_id == "SIFT"
-    sift = cv2.SIFT_create(400)
-    keypoints, features = sift.detectAndCompute(image, None) # 产生关键点位置跟特征向量
+    sift = cv2.SIFT_create(400) # OpenCV已经把SIFT复杂的底层C++算法封装成了现成的接口
+    keypoints, features = sift.detectAndCompute(image, None) # 产生关键点对象列表（包含坐标(x,y)、尺度、方向等）以及128维的手工描述子向量
     return keypoints, features

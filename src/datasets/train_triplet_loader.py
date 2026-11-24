@@ -10,20 +10,14 @@
 每次调用 __getitem__ 会把 a/p/n 三张图转为灰度图并拼接成 [3, H, W] 的张量返回。
 ================================================================================
 """
-import os.path
-
-import torch
-import torch.utils.data as data
 import os.path as osp
 import glob
-import sys
+import torch
+import torch.utils.data as data
 from PIL import Image
-import cv2 as cv
 from torchvision import transforms
 
-sys.path.append("../")
 supported_image_ext = [".png", ".bmp", ".jpg", ".jpeg"]
-labels = []
 
 
 class TripletDataset(data.Dataset):
