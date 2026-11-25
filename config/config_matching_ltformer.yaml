@@ -11,6 +11,7 @@ params:
     patch_size: 64                                               # 从测试图像中裁剪关键点局部块的半边长（对应 Table 2 的 64 尺度）
     matching_threshold: 0.5                                      # 描述子欧氏距离阈值：超过该距离则认为“无法匹配（拒绝）”
     distance_matching_threshold: 5                               # 空间位置误差阈值（像素）：用于评估预测点与真值点偏差 <=5px 才算正确
+    use_blur: false                                              # 是否在测试 CLAHE 前先做 5x5 滤波（设为 true 可对齐训练预处理）
 hydra:
     job:
         chdir: true

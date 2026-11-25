@@ -268,6 +268,8 @@ def main():
     parser.add_argument("--workers", type=int, default=os.cpu_count() or 4, help="Number of worker processes")
     parser.add_argument("--png-compression", type=int, default=1, help="PNG compression 0-9 (1 is fast and compact)")
     parser.add_argument("--no-local-cache", action="store_true", help="Read directly from --rgb-dir without copying to SSD")
+    parser.add_argument("--max-images", type=int, default=0,
+                        help="Only use the first N source images (sorted). e.g. 80 = train split, leaving the last 20 for testing (0=all)")
     args = parser.parse_args()
 
     # 1. 扫描输入目录并自动判断数据模式
@@ -285,6 +287,13 @@ def main():
         assert len(rgb_files) == len(pair_files), (
             f"Mismatched image counts: rgb={len(rgb_files)} vs pair={len(pair_files)}"
         )
+
+    # 只取排序后的前 N 张作为训练集（剩余图像留作测试，避免数据泄漏）
+    if args.max_images > 0:
+        print(f"Train split: using first {min(args.max_images, len(rgb_files))} / {len(rgb_files)} source images")
+        rgb_files = rgb_files[: args.max_images]
+        if pair_files:
+            pair_files = pair_files[: args.max_images]
 
     # 2. 将源数据预热到本地 SSD
     if not args.no_local_cache:

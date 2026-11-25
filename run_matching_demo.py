@@ -79,12 +79,13 @@ def main(cfg):
     patch_size = cfg.params.patch_size
     distance_matching_threshold = cfg.params.distance_matching_threshold
     matching_threshold = cfg.params.matching_threshold
+    use_blur = cfg.params.get("use_blur", False)
 
     # 1. 通过模型工厂加载指定架构与权重文件
     model = model_factory(model_name, model_weights_path)
 
     # 2. 构造测试集 Dataset（自动读取图像对、真值关键点并裁剪左右局部 Patch）
-    test_dataset = PatchDataset(validation_data_root, patch_size)
+    test_dataset = PatchDataset(validation_data_root, patch_size, image_size=image_size, use_blur=use_blur)
 
     # 保存所有输出图片路径，便于后续合成 GIF
     frame_path_list = []
